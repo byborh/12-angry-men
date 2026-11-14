@@ -26,3 +26,14 @@ export function list(o: Obj | undefined, key: string): unknown[] | undefined {
   const v = o?.[key];
   return Array.isArray(v) ? v : undefined;
 }
+
+/** Returns undefined for invalid JSON or a non-object line. Callers count it as a skipped line. */
+export function parseJsonLine(line: string): Obj | undefined {
+  try {
+    const value: unknown = JSON.parse(line);
+    return isObj(value) ? value : undefined;
+  } catch {
+    // Not swallowed: undefined tells the caller to count the line as skipped.
+    return undefined;
+  }
+}

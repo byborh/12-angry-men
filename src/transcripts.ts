@@ -2,10 +2,16 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { entriesIfExists, messageOf } from "./fsutil.ts";
-import { type Obj, count, isObj, list, obj, str } from "./json.ts";
+import { type Obj, count, isObj, list, obj, parseJsonLine, str } from "./json.ts";
 
 /** Two records further apart than this mean the user left: the gap is not active time. */
 const IDLE_MS = 15 * 60 * 1000;
+
+/** Trigger phrases sit at the start of a prompt. The rest is pasted logs and code. */
+const PROMPT_TEXT_MAX = 2000;
+
+/** Context blocks the IDE puts before the prompt. They hide how the prompt starts. */
+const IDE_CONTEXT_RE = /^\s*<(ide_opened_file|ide_selection|ide_diagnostics|system-reminder)>[\s\S]*?<\/\1>/;
 
 const COMMAND_RE = /<command-name>\/?([^<\s]+)<\/command-name>/;
 
@@ -20,8 +26,17 @@ export interface Invocation {
   project: string;
 }
 
+/** One prompt the person typed, and every skill that ran before the next prompt. */
+export interface Turn {
+  /** Empty for a slash command: its skill is already in `invoked`. */
+  text: string;
+  at: number;
+  project: string;
+  invoked: string[];
+}
+
 export interface Session {
-  file: string;
+  id: string;
   project: string;
   isSubagent: boolean;
   start: number;
@@ -42,15 +57,18 @@ export interface ModelUsage {
 export interface ScanResult {
   sessions: Session[];
   invocations: Invocation[];
-  promptTimes: number[];
+  turns: Turn[];
   tools: Map<string, number>;
   models: Map<string, ModelUsage>;
   skippedLines: number;
   errors: string[];
 }
 
-function emptyResult(): ScanResult {
-  return { sessions: [], invocations: [], promptTimes: [], tools: new Map(), models: new Map(), skippedLines: 0, errors: [] };
+interface FileState {
+  session: Session;
+  seenMessages: Set<string>;
+  turn: Turn | undefined;
+  projectFromCwd: boolean;
 }
 
 function bump(map: Map<string, number>, key: string): void {
@@ -76,6 +94,12 @@ async function listTranscripts(projectsDir: string): Promise<{ file: string; isS
   return out;
 }
 
+export function stripIdeContext(text: string): string {
+  let out = text;
+  for (let m = IDE_CONTEXT_RE.exec(out); m; m = IDE_CONTEXT_RE.exec(out)) out = out.slice(m[0].length);
+  return out.trim();
+}
+
 function promptText(message: Obj | undefined): string {
   const content = message?.["content"];
   if (typeof content === "string") return content;
@@ -92,22 +116,25 @@ function isHumanPrompt(rec: Obj): boolean {
   return str(obj(rec, "origin"), "kind") === "human";
 }
 
-function onUser(rec: Obj, at: number, session: Session, acc: ScanResult): void {
+function onUser(rec: Obj, at: number, state: FileState, acc: ScanResult): void {
   if (!isHumanPrompt(rec)) return;
-  const text = promptText(obj(rec, "message")).trim();
-  if (text === "") return;
+  const raw = promptText(obj(rec, "message")).trim();
+  if (raw === "") return;
+  const text = stripIdeContext(raw);
+  const { session } = state;
   session.humanPrompts++;
-  acc.promptTimes.push(at);
-  const command = COMMAND_RE.exec(text);
-  if (command?.[1]) {
-    acc.invocations.push({ name: command[1], via: "slash", at, project: session.project });
+  const command = COMMAND_RE.exec(raw)?.[1];
+  state.turn = { text: command ? "" : text.slice(0, PROMPT_TEXT_MAX), at, project: session.project, invoked: command ? [command] : [] };
+  acc.turns.push(state.turn);
+  if (command) {
+    acc.invocations.push({ name: command, via: "slash", at, project: session.project });
     return;
   }
   if (CORRECTION_RE.test(text)) session.corrections++;
 }
 
 /** One API message is split into one record per content block, so usage is counted once per message id. */
-function onAssistant(rec: Obj, at: number, session: Session, seen: Set<string>, acc: ScanResult): void {
+function onAssistant(rec: Obj, at: number, state: FileState, acc: ScanResult): void {
   const message = obj(rec, "message");
   for (const block of list(message, "content") ?? []) {
     if (!isObj(block) || str(block, "type") !== "tool_use") continue;
@@ -115,12 +142,14 @@ function onAssistant(rec: Obj, at: number, session: Session, seen: Set<string>, 
     if (!name) continue;
     bump(acc.tools, name);
     const skill = str(obj(block, "input"), "skill");
-    if (name === "Skill" && skill) acc.invocations.push({ name: skill, via: "auto", at, project: session.project });
+    if (name !== "Skill" || !skill) continue;
+    acc.invocations.push({ name: skill, via: "auto", at, project: state.session.project });
+    state.turn?.invoked.push(skill);
   }
   const id = str(message, "id");
   const model = str(message, "model");
-  if (!id || !model || seen.has(id) || model === "<synthetic>") return;
-  seen.add(id);
+  if (!id || !model || state.seenMessages.has(id) || model === "<synthetic>") return;
+  state.seenMessages.add(id);
   const usage = obj(message, "usage");
   const m = acc.models.get(model) ?? { messages: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   m.messages++;
@@ -131,58 +160,61 @@ function onAssistant(rec: Obj, at: number, session: Session, seen: Set<string>, 
   acc.models.set(model, m);
 }
 
-function parseLine(line: string): Obj | undefined {
-  try {
-    const value: unknown = JSON.parse(line);
-    return isObj(value) ? value : undefined;
-  } catch {
-    // The caller counts undefined as a skipped line and shows the total in the UI.
-    return undefined;
+function newState(file: string, isSubagent: boolean): FileState {
+  const projectDir = isSubagent ? path.dirname(path.dirname(path.dirname(file))) : path.dirname(file);
+  return {
+    session: {
+      id: path.basename(file, ".jsonl"),
+      project: path.basename(projectDir),
+      isSubagent,
+      start: Infinity,
+      end: -Infinity,
+      activeMs: 0,
+      humanPrompts: 0,
+      corrections: 0,
+    },
+    seenMessages: new Set(),
+    turn: undefined,
+    projectFromCwd: false,
+  };
+}
+
+function onRecord(rec: Obj, state: FileState, acc: ScanResult): void {
+  const type = str(rec, "type");
+  const at = Date.parse(str(rec, "timestamp") ?? "");
+  if ((type !== "user" && type !== "assistant") || Number.isNaN(at)) return;
+  const { session } = state;
+  const cwd = str(rec, "cwd");
+  if (cwd && !state.projectFromCwd) {
+    session.project = cwd;
+    state.projectFromCwd = true;
   }
+  const gap = at - session.end;
+  if (gap > 0 && gap <= IDLE_MS) session.activeMs += gap;
+  session.start = Math.min(session.start, at);
+  session.end = Math.max(session.end, at);
+  if (type === "user") onUser(rec, at, state, acc);
+  else onAssistant(rec, at, state, acc);
 }
 
 async function scanFile(file: string, isSubagent: boolean, acc: ScanResult): Promise<void> {
-  const session: Session = {
-    file,
-    project: path.basename(path.dirname(isSubagent ? path.dirname(path.dirname(file)) : file)),
-    isSubagent,
-    start: Infinity,
-    end: -Infinity,
-    activeMs: 0,
-    humanPrompts: 0,
-    corrections: 0,
-  };
-  const seen = new Set<string>();
-  let projectFromCwd = false;
+  const state = newState(file, isSubagent);
   const lines = createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
   for await (const line of lines) {
     // Cheap pre-filter: most bytes are API blobs and snapshots that carry no activity.
     if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
-    const rec = parseLine(line);
+    const rec = parseJsonLine(line);
     if (!rec) {
       acc.skippedLines++;
       continue;
     }
-    const type = str(rec, "type");
-    const at = Date.parse(str(rec, "timestamp") ?? "");
-    if ((type !== "user" && type !== "assistant") || Number.isNaN(at)) continue;
-    const cwd = str(rec, "cwd");
-    if (cwd && !projectFromCwd) {
-      session.project = cwd;
-      projectFromCwd = true;
-    }
-    const gap = at - session.end;
-    if (gap > 0 && gap <= IDLE_MS) session.activeMs += gap;
-    session.start = Math.min(session.start, at);
-    session.end = Math.max(session.end, at);
-    if (type === "user") onUser(rec, at, session, acc);
-    else onAssistant(rec, at, session, seen, acc);
+    onRecord(rec, state, acc);
   }
-  if (Number.isFinite(session.start)) acc.sessions.push(session);
+  if (Number.isFinite(state.session.start)) acc.sessions.push(state.session);
 }
 
 export async function scanTranscripts(claudeDir: string): Promise<ScanResult> {
-  const acc = emptyResult();
+  const acc: ScanResult = { sessions: [], invocations: [], turns: [], tools: new Map(), models: new Map(), skippedLines: 0, errors: [] };
   const files = await listTranscripts(path.join(claudeDir, "projects"));
   for (const { file, isSubagent } of files) {
     try {

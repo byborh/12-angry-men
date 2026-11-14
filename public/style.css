@@ -91,3 +91,8 @@ svg.daily text { fill: var(--muted); font-size: 11px; }
 #warnings { margin-top: 32px; }
 #warnings li { font-family: ui-monospace, monospace; font-size: 12px; color: var(--unused); }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.miss { margin-bottom: 12px; }
+.miss p { margin: 0 0 6px; }
+.miss ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.miss li { margin-bottom: 4px; overflow-wrap: anywhere; }

@@ -5,10 +5,16 @@
     "moduleResolution": "nodenext",
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "types": [
+      "node"
+    ],
+    "noEmit": true
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "test"
+  ]
 }

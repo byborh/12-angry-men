@@ -24,22 +24,23 @@ function hostAllowed(req: IncomingMessage, port: number): boolean {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
 
-async function handle(req: IncomingMessage, res: ServerResponse, port: number, claudeDir: string): Promise<void> {
+async function handle(req: IncomingMessage, res: ServerResponse, port: number, claudeDir: string, label: string): Promise<void> {
   if (!hostAllowed(req, port)) return send(res, 403, "text/plain", "Forbidden host");
   if (req.method !== "GET") return send(res, 405, "text/plain", "Method not allowed");
   const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
   if (pathname === "/api/report") {
     const report = await buildReport(claudeDir);
-    return send(res, 200, "application/json", JSON.stringify(report));
+    return send(res, 200, "application/json", JSON.stringify({ ...report, claudeDir: label }));
   }
   const asset = STATIC[pathname];
   if (!asset) return send(res, 404, "text/plain", "Not found");
   send(res, 200, asset.type, await readFile(PUBLIC_DIR + asset.file));
 }
 
-export function startServer(port: number, claudeDir: string): Promise<Server> {
+/** `label` names the data source on the page: a path, or "demo data". */
+export function startServer(port: number, claudeDir: string, label: string): Promise<Server> {
   const server = createServer((req, res) => {
-    handle(req, res, port, claudeDir).catch((e: unknown) => {
+    handle(req, res, port, claudeDir, label).catch((e: unknown) => {
       console.error(`[12-angry-men] ${req.url}: ${messageOf(e)}`);
       if (!res.headersSent) send(res, 500, "text/plain", `Error: ${messageOf(e)}`);
     });

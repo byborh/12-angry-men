@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDemo } from "./demo.ts";
 import { messageOf } from "./fsutil.ts";
+import { tildify } from "./report.ts";
 import { startServer } from "./server.ts";
 
-const USAGE = `Usage: 12-angry-men [--port <number>] [--dir <claude dir>] [--no-open]
+const USAGE = `Usage: 12-angry-men [--port <number>] [--dir <claude dir> | --demo] [--no-open]
 
   --port     Local port. Default: 4512.
   --dir      Claude Code folder. Default: ~/.claude.
+  --demo     Show generated fake data. Your files are not read.
   --no-open  Do not open the browser.`;
 
 interface Options {
   port: number;
-  claudeDir: string;
+  claudeDir: string | undefined;
+  demo: boolean;
   open: boolean;
 }
 
@@ -24,11 +29,15 @@ function fail(message: string): never {
 }
 
 function parseArgs(argv: string[]): Options {
-  const opts: Options = { port: 4512, claudeDir: path.join(os.homedir(), ".claude"), open: true };
+  const opts: Options = { port: 4512, claudeDir: undefined, demo: false, open: true };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--no-open") {
       opts.open = false;
+      continue;
+    }
+    if (arg === "--demo") {
+      opts.demo = true;
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -49,6 +58,7 @@ function parseArgs(argv: string[]): Options {
     }
     fail(`unknown option: ${arg}`);
   }
+  if (opts.demo && opts.claudeDir) fail("--demo and --dir cannot be used together");
   return opts;
 }
 
@@ -70,12 +80,22 @@ function openBrowser(url: string): void {
   child.unref();
 }
 
+/** The demo folder is temporary: remove it when the server stops. */
+async function demoDir(): Promise<string> {
+  const dir = await createDemo();
+  const cleanup = (): void => rmSync(dir, { recursive: true, force: true });
+  process.on("exit", cleanup);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => process.exit(0));
+  return dir;
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
-  await assertTranscripts(opts.claudeDir);
-  await startServer(opts.port, opts.claudeDir);
+  const claudeDir = opts.demo ? await demoDir() : (opts.claudeDir ?? path.join(os.homedir(), ".claude"));
+  await assertTranscripts(claudeDir);
+  await startServer(opts.port, claudeDir, opts.demo ? "demo data" : tildify(claudeDir));
   const url = `http://127.0.0.1:${opts.port}/`;
-  console.log(`12 Angry Men reads ${opts.claudeDir}\nOpen ${url}  (Ctrl+C to stop)`);
+  console.log(`12 Angry Men reads ${opts.demo ? "generated demo data" : claudeDir}\nOpen ${url}  (Ctrl+C to stop)`);
   if (opts.open) openBrowser(url);
 }
 

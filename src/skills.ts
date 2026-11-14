@@ -12,6 +12,8 @@ export interface SkillDef {
   source: SkillSource;
   description: string;
   path: string;
+  /** Set for project skills only: they load only inside this folder. */
+  projectRoot?: string;
 }
 
 export interface Inventory {
@@ -26,8 +28,9 @@ interface Frontmatter {
 
 function unquote(v: string): string {
   const t = v.trim();
-  const quoted = (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"));
-  return quoted ? t.slice(1, -1) : t;
+  if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1).replace(/\\(["\\])/g, "$1");
+  if (t.length >= 2 && t.startsWith("'") && t.endsWith("'")) return t.slice(1, -1).replace(/''/g, "'");
+  return t;
 }
 
 /** Reads only the two keys we need. Supports one-line values and YAML block scalars (> and |). */
@@ -77,7 +80,8 @@ async function scanRoot(root: string, source: SkillSource, prefix: string | unde
     const def = await readDef(path.join(commandsDir, file), file.slice(0, -3), "command", source, prefix);
     if (def) out.push(def);
   }
-  return out;
+  // A project root is <repo>/.claude, so the repo is its parent.
+  return source === "project" ? out.map((def) => ({ ...def, projectRoot: path.dirname(root) })) : out;
 }
 
 async function readJson(file: string): Promise<unknown> {

@@ -64,6 +64,7 @@ function skillRow(s) {
     h("td", { class: "num", text: String(s.slash) }),
     h("td", { class: "num", text: String(s.auto) }),
     h("td", { class: "num", text: relative(s.lastUsed) }),
+    h("td", { class: "num", title: "Prompts that match a trigger phrase without the skill running / all matching prompts", text: s.triggers ? `${s.triggers.missed} / ${s.triggers.matched}` : "—" }),
     h("td", { class: "num", text: `≈${s.listingTokens}` }),
     h("td", { class: "desc", text: desc }),
   );
@@ -88,8 +89,9 @@ function renderSkills(report) {
     ),
   );
   if (report.window) {
+    const history = report.historyFrom ? ` Typed commands also come from history.jsonl since ${dateFmt.format(report.historyFrom)} (CLI prompts only).` : "";
     root.append(
-      h("p", { class: "note", text: `Your transcripts cover ${report.window.days} days. Claude Code deletes old transcripts (setting cleanupPeriodDays), so "unused" means unused in this window only.` }),
+      h("p", { class: "note", text: `Your transcripts cover ${report.window.days} days. Claude Code deletes old transcripts (setting cleanupPeriodDays), so "unused" means unused in this window only.${history}` }),
     );
   }
 
@@ -118,10 +120,12 @@ function renderSkills(report) {
   const head = h(
     "tr",
     {},
-    ...[["Skill"], ["Source"], ["Status"], ["Typed", "num"], ["Auto", "num"], ["Last used", "num"], ["Listing", "num"], ["Description"]].map(([l, c]) => h("th", { class: c ?? "", text: l })),
+    ...[["Skill"], ["Source"], ["Status"], ["Typed", "num"], ["Auto", "num"], ["Last used", "num"], ["Missed", "num"], ["Listing", "num"], ["Description"]].map(([l, c]) => h("th", { class: c ?? "", text: l })),
   );
   root.append(h("h2", { text: "Your skills" }), filters, h("div", { class: "card" }, h("table", {}, h("thead", {}, head), body)));
   draw();
+
+  renderMisses(root, skills);
 
   if (report.otherInvocations.length > 0) {
     root.append(
@@ -133,6 +137,35 @@ function renderSkills(report) {
       ),
     );
   }
+}
+
+function missCard(s) {
+  const examples = s.triggers.examples.map((m) =>
+    h("li", {}, h("span", { class: "muted", text: `${dateFmt.format(m.at)} · ${m.project} — ` }), document.createTextNode(m.excerpt)),
+  );
+  return h(
+    "div",
+    { class: "card miss" },
+    h("p", {}, h("b", { class: "mono", text: s.id }), document.createTextNode(` — ${s.triggers.missed} of ${s.triggers.matched} matching prompts ran without it.`)),
+    h("p", { class: "muted", text: `Trigger phrases: ${s.triggers.phrases.map((p) => `"${p}"`).join(", ")}` }),
+    h("ul", {}, ...examples),
+  );
+}
+
+function renderMisses(root, skills) {
+  const withPhrases = skills.filter((s) => s.triggers);
+  const missed = withPhrases.filter((s) => s.triggers.missed > 0).sort((a, b) => b.triggers.missed - a.triggers.missed);
+  const silent = withPhrases.filter((s) => s.triggers.matched === 0 && s.status === "unused");
+  root.append(
+    h("h2", { text: "Missed triggers" }),
+    h("p", { class: "muted", text: "The page reads the quoted phrases in each skill description. A prompt that matches one, without the skill running before your next prompt, is a miss." }),
+  );
+  if (missed.length === 0) root.append(h("p", { text: "No miss found." }));
+  for (const s of missed) root.append(missCard(s));
+  if (silent.length === 0) return;
+  root.append(
+    h("p", { class: "note", text: `${silent.length} unused skills have trigger phrases that never appear in your prompts: ${silent.map((s) => s.id).join(", ")}. You do not ask for this work, so you may not need these skills.` }),
+  );
 }
 
 // ---------- Activity tab ----------
@@ -230,14 +263,17 @@ function renderWarnings(warnings) {
   root.append(h("h2", { text: `${warnings.length} problem(s) while reading` }), h("ul", {}, ...warnings.map((w) => h("li", { text: w }))));
 }
 
+function showTab(name) {
+  for (const b of document.querySelectorAll("nav button")) b.classList.toggle("on", b.dataset.tab === name);
+  for (const tab of document.querySelectorAll(".tab")) tab.hidden = tab.id !== name;
+}
+
+// The tab lives in the URL hash, so a link or a reload keeps it.
 function setupTabs() {
-  const buttons = document.querySelectorAll("nav button");
-  for (const b of buttons) {
-    b.addEventListener("click", () => {
-      for (const other of buttons) other.classList.toggle("on", other === b);
-      for (const tab of document.querySelectorAll(".tab")) tab.hidden = tab.id !== b.dataset.tab;
-    });
-  }
+  for (const b of document.querySelectorAll("nav button")) b.addEventListener("click", () => (location.hash = b.dataset.tab));
+  const fromHash = () => showTab(location.hash === "#activity" ? "activity" : "skills");
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
 }
 
 async function main() {
