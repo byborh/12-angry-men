@@ -4,6 +4,7 @@ import { rmSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { askClaude } from "./claude.ts";
 import { createDemo } from "./demo.ts";
 import { messageOf } from "./fsutil.ts";
 import { tildify } from "./report.ts";
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   const claudeDir = opts.demo ? await demoDir() : (opts.claudeDir ?? path.join(os.homedir(), ".claude"));
   await assertTranscripts(claudeDir);
-  await startServer(opts.port, claudeDir, opts.demo ? "demo data" : tildify(claudeDir));
+  await startServer(opts.port, claudeDir, opts.demo ? "demo data" : tildify(claudeDir), askClaude);
   const url = `http://127.0.0.1:${opts.port}/`;
   console.log(`12 Angry Men reads ${opts.demo ? "generated demo data" : claudeDir}\nOpen ${url}  (Ctrl+C to stop)`);
   if (opts.open) openBrowser(url);

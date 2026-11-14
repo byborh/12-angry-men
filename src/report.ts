@@ -1,5 +1,6 @@
 import os from "node:os";
 import { scanHistory } from "./history.ts";
+import { localDay } from "./time.ts";
 import { type SkillDef, type SkillSource, scanSkills } from "./skills.ts";
 import { type Invocation, type Session, type Turn, scanTranscripts } from "./transcripts.ts";
 import { type TriggerStats, triggerStats } from "./triggers.ts";
@@ -59,11 +60,6 @@ export function tildify(p: string): string {
   return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 }
 
-function localDay(t: number): string {
-  const d = new Date(t);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 function hours(ms: number): number {
   return Math.round((ms / 3_600_000) * 10) / 10;
 }
@@ -106,6 +102,11 @@ function buildProjects(sessions: Session[]): Report["projects"] {
     .map(([name, p]) => ({ name: tildify(name), sessions: p.sessions, prompts: p.prompts, activeHours: hours(p.activeMs) }))
     .sort((a, b) => b.prompts - a.prompts)
     .slice(0, TOP);
+}
+
+/** Session cwds that are real paths. Project skills live in <cwd>/.claude. */
+export function projectDirsOf(sessions: Session[]): string[] {
+  return [...new Set(sessions.map((s) => s.project).filter((p) => p.startsWith("/") || /^[A-Za-z]:\\/.test(p)))];
 }
 
 function statusOf(lastUsed: number | null, now: number): SkillStatus {
@@ -155,8 +156,7 @@ export async function buildReport(claudeDir: string): Promise<Report> {
   const scan = await scanTranscripts(claudeDir);
   const main = scan.sessions.filter((s) => !s.isSubagent);
   const history = await scanHistory(claudeDir, new Set(main.map((s) => s.id)));
-  const projectDirs = [...new Set(scan.sessions.map((s) => s.project).filter((p) => p.startsWith("/") || /^[A-Za-z]:\\/.test(p)))];
-  const inventory = await scanSkills(claudeDir, projectDirs);
+  const inventory = await scanSkills(claudeDir, projectDirsOf(scan.sessions));
   const promptTimes = scan.turns.map((t) => t.at);
   const hasData = scan.sessions.length > 0;
   const from = Math.min(...scan.sessions.map((s) => s.start));

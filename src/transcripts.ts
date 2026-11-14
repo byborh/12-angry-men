@@ -32,7 +32,10 @@ export interface Turn {
   text: string;
   at: number;
   project: string;
+  session: string;
   invoked: string[];
+  /** Tool names Claude called during the turn, in order. */
+  tools: string[];
 }
 
 export interface Session {
@@ -116,6 +119,10 @@ function isHumanPrompt(rec: Obj): boolean {
   return str(obj(rec, "origin"), "kind") === "human";
 }
 
+export function isCorrection(text: string): boolean {
+  return CORRECTION_RE.test(text);
+}
+
 function onUser(rec: Obj, at: number, state: FileState, acc: ScanResult): void {
   if (!isHumanPrompt(rec)) return;
   const raw = promptText(obj(rec, "message")).trim();
@@ -124,13 +131,20 @@ function onUser(rec: Obj, at: number, state: FileState, acc: ScanResult): void {
   const { session } = state;
   session.humanPrompts++;
   const command = COMMAND_RE.exec(raw)?.[1];
-  state.turn = { text: command ? "" : text.slice(0, PROMPT_TEXT_MAX), at, project: session.project, invoked: command ? [command] : [] };
+  state.turn = {
+    text: command ? "" : text.slice(0, PROMPT_TEXT_MAX),
+    at,
+    project: session.project,
+    session: session.id,
+    invoked: command ? [command] : [],
+    tools: [],
+  };
   acc.turns.push(state.turn);
   if (command) {
     acc.invocations.push({ name: command, via: "slash", at, project: session.project });
     return;
   }
-  if (CORRECTION_RE.test(text)) session.corrections++;
+  if (isCorrection(text)) session.corrections++;
 }
 
 /** One API message is split into one record per content block, so usage is counted once per message id. */
@@ -141,6 +155,7 @@ function onAssistant(rec: Obj, at: number, state: FileState, acc: ScanResult): v
     const name = str(block, "name");
     if (!name) continue;
     bump(acc.tools, name);
+    state.turn?.tools.push(name);
     const skill = str(obj(block, "input"), "skill");
     if (name !== "Skill" || !skill) continue;
     acc.invocations.push({ name: skill, via: "auto", at, project: state.session.project });

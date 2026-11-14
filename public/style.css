@@ -96,3 +96,21 @@ svg.daily text { fill: var(--muted); font-size: 11px; }
 .miss p { margin: 0 0 6px; }
 .miss ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
 .miss li { margin-bottom: 4px; overflow-wrap: anywhere; }
+
+button.primary, .cand > button {
+  font: inherit; font-size: 14px; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+  background: var(--accent); color: #fff; border: 0; font-weight: 600; margin: 8px 0;
+}
+.cand > button { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+button:disabled { opacity: 0.6; cursor: wait; }
+.cand { margin-top: 16px; }
+.cand p { margin: 0 0 6px; }
+.cand details { margin: 8px 0; font-size: 13px; }
+.cand details li { margin-bottom: 6px; overflow-wrap: anywhere; }
+.cand summary { cursor: pointer; color: var(--accent); }
+.draft textarea {
+  width: 100%; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; padding: 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;
+}
+.error { color: var(--unused); white-space: pre-wrap; }
+.ok { color: var(--active); }

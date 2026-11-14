@@ -25,16 +25,57 @@ const SKILLS: DemoSkill[] = [
 
 const PROJECTS = ["/home/alex/code/webshop", "/home/alex/code/payments-api", "/home/alex/code/blog", "/home/alex/dotfiles"];
 
-const PROMPTS = [
+/** One-off work: each prompt is used once, so none of them is a habit. */
+const ONE_OFFS = [
   "add a quantity selector to the cart page",
   "why does the checkout test fail on CI only",
   "rename userId to customerId in the orders module",
-  "write a migration that adds an index on orders.created_at",
   "add retry with backoff to the webhook sender",
   "move the date helpers to a shared package",
-  "update the README with the new env vars",
-  "split this component, it is 600 lines",
+  "split the ProductCard component, it is 600 lines",
+  "the search API returns duplicates when I filter by brand",
+  "add a dark mode toggle to the settings page",
+  "upgrade eslint to v10 and fix the new warnings",
+  "write a script that exports last month's invoices to CSV",
+  "why is the bundle 2 MB bigger since yesterday",
+  "add an OpenGraph image to the blog posts",
+  "replace moment with date-fns in the blog",
+  "the login form does not show server errors",
+  "add pagination to the admin orders table",
+  "make the price formatter handle JPY without decimals",
+  "add a health check endpoint to the payments API",
+  "the signup email has a broken link in Outlook",
+  "set up a GitHub Action that runs the e2e tests nightly",
+  "add rate limiting to the public API",
+  "my zsh prompt is slow, profile it",
+  "add a keyboard shortcut to open the search",
+  "the invoice PDF cuts long addresses",
+  "convert the blog config from YAML to TypeScript",
+  "find why the webhook test leaks a timer",
+  "add an empty state to the order history page",
+  "the cart total is wrong when a coupon and free shipping stack",
+  "add Sentry to the payments API",
+  "write a README section about local HTTPS",
+  "the RSS feed misses the last post",
+  "make the admin table sortable by date",
+  "add a retry button when the payment fails",
+  "clean up the unused feature flags",
+  "add types to the old analytics helper",
+  "my tmux config breaks copy mode, fix it",
+  "move the refund logic out of the controller",
+  "the search page flickers on first load",
+  "add a cookie banner that respects Do Not Track",
+  "why does Docker rebuild everything on each change",
+  "add structured logs to the order service",
 ];
+const TABLES = ["orders.created_at", "users.email", "invoices.status", "carts.updated_at", "payments.provider_id"];
+const FILES = ["checkout.json", "account.json", "emails.json", "errors.json", "pricing.json"];
+
+/** Two habits with changing inputs: the Candidates tab must find them. */
+function habit(rand: () => number): string {
+  if (rand() < 0.5) return `write the migration for an index on ${pick(rand, TABLES)}, with the rollback`;
+  return `translate the new strings in ${pick(rand, FILES)} to French and German`;
+}
 
 const CORRECTIONS = ["no, keep the old API and add a new one", "that's not what I asked, only the cart page", "still doesn't work, same error"];
 const TOOLS = ["Bash", "Read", "Edit", "Grep", "Read", "Bash", "Edit", "Write", "Glob"];
@@ -63,6 +104,8 @@ interface Ctx {
   cwd: string;
   at: number;
   msg: number;
+  /** Shared by all sessions: each one-off prompt is used once. */
+  oneOffs: string[];
 }
 
 function userLine(ctx: Ctx, content: string): void {
@@ -94,10 +137,12 @@ function sessionTurns(ctx: Ctx): void {
   else if (r < 0.45) turn(ctx, "the CI is red, can you check the logs", undefined);
   else if (r < 0.5) turn(ctx, "<command-name>/write-changelog</command-name>", undefined);
   else if (r < 0.53) turn(ctx, "what did I do yesterday", undefined);
-  const n = 2 + Math.floor(ctx.rand() * 7);
+  const n = 1 + Math.floor(ctx.rand() * 3);
   for (let i = 0; i < n; i++) {
-    const correction = ctx.rand() < 0.06;
-    turn(ctx, correction ? pick(ctx.rand, CORRECTIONS) : pick(ctx.rand, PROMPTS), undefined);
+    const r2 = ctx.rand();
+    if (r2 < 0.08) turn(ctx, pick(ctx.rand, CORRECTIONS), undefined);
+    else if (r2 < 0.3) turn(ctx, habit(ctx.rand), undefined);
+    else turn(ctx, ctx.oneOffs.shift() ?? habit(ctx.rand), undefined);
   }
 }
 
@@ -110,6 +155,7 @@ function sessionStart(rand: () => number, day: Date): number {
 
 async function writeSessions(dir: string, now: number): Promise<void> {
   const rand = rng(12);
+  const oneOffs = [...ONE_OFFS];
   for (let back = 34; back >= 0; back--) {
     const day = new Date(now - back * DAY_MS);
     const weekend = day.getDay() === 0 || day.getDay() === 6;
@@ -117,7 +163,7 @@ async function writeSessions(dir: string, now: number): Promise<void> {
     for (let s = 0; s < sessions; s++) {
       const cwd = pick(rand, PROJECTS);
       const sessionId = `demo-${back}-${s}`;
-      const ctx: Ctx = { rand, lines: [], sessionId, cwd, at: sessionStart(rand, day), msg: 0 };
+      const ctx: Ctx = { rand, lines: [], sessionId, cwd, at: sessionStart(rand, day), msg: 0, oneOffs };
       if (ctx.at > now) continue;
       sessionTurns(ctx);
       const projectDir = path.join(dir, "projects", cwd.replace(/\//g, "-"));

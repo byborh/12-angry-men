@@ -254,6 +254,117 @@ function renderActivity(report) {
   );
 }
 
+// ---------- Candidates tab ----------
+
+async function post(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-12am": "1" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function costText(cost) {
+  return cost === null ? "cost not reported" : `≈ $${cost.toFixed(2)}, as reported by Claude Code`;
+}
+
+function errorLine(message) {
+  return h("p", { class: "error", text: message });
+}
+
+function occurrenceItem(o) {
+  const item = h("li", {}, h("span", { class: "muted", text: `${dateFmt.format(o.at)} · ${o.project} — ` }), document.createTextNode(o.text));
+  if (o.followUps.length > 0) item.append(h("ul", { class: "muted" }, ...o.followUps.map((f) => h("li", { text: `then: ${f}` }))));
+  return item;
+}
+
+function draftBox(c, draft) {
+  const area = h("textarea", { rows: "18", spellcheck: "false" });
+  area.value = draft.markdown;
+  const status = h("div");
+  const install = h("button", {
+    class: "primary",
+    text: `Install to ~/.claude/skills/${c.name}/SKILL.md`,
+    onclick: async () => {
+      install.disabled = true;
+      try {
+        const res = await post("/api/install", { name: c.name, content: area.value });
+        status.replaceChildren(h("p", { class: "ok", text: `Installed: ${res.path}. Claude Code loads it in your next session.` }));
+      } catch (e) {
+        install.disabled = false;
+        status.replaceChildren(errorLine(e.message));
+      }
+    },
+  });
+  return h("div", { class: "draft" }, h("p", { class: "muted", text: `Draft written by Claude from the sessions above (${costText(draft.costUsd)}). Edit it before you install it.` }), area, install, status);
+}
+
+function candidateCard(c) {
+  const slot = h("div");
+  const draftButton = h("button", {
+    text: "Draft the skill",
+    onclick: async () => {
+      draftButton.disabled = true;
+      draftButton.textContent = "Claude is writing the draft…";
+      try {
+        slot.replaceChildren(draftBox(c, await post("/api/draft", { name: c.name })));
+        draftButton.hidden = true;
+      } catch (e) {
+        draftButton.disabled = false;
+        draftButton.textContent = "Draft the skill";
+        slot.replaceChildren(errorLine(e.message));
+      }
+    },
+  });
+  const stats = `${c.occurrences.length} times · ${c.sessions} sessions · ${c.days} days · ${c.projects} project(s) · ~${c.avgTools} tool calls each`;
+  return h(
+    "div",
+    { class: "card cand" },
+    h("p", {}, h("b", { text: c.title }), document.createTextNode(" "), h("span", { class: "mono muted", text: c.name })),
+    h("p", { text: c.why }),
+    h("p", { class: "muted", text: stats }),
+    ...(c.overlaps
+      ? [h("p", { class: "note", text: `Your skill ${c.overlaps} already covers this task, but it did not run for these prompts. Add your real phrases to its description before you write a new skill.` })]
+      : []),
+    h("details", {}, h("summary", { text: `Proof: the ${c.occurrences.length} prompts` }), h("ul", {}, ...c.occurrences.map(occurrenceItem))),
+    draftButton,
+    slot,
+  );
+}
+
+function renderRun(box, run) {
+  const summary =
+    `${run.candidates.length} candidate(s) from ${run.promptsSent} prompts. ` +
+    `${run.rejected} group(s) dropped because they failed the proof threshold (3 times, in 2 sessions, on 2 days). ${costText(run.costUsd)}.`;
+  box.replaceChildren(h("p", { class: "note", text: summary }), ...run.candidates.map(candidateCard));
+}
+
+function renderCandidates(previous) {
+  const root = document.getElementById("candidates");
+  const box = h("div");
+  const button = h("button", {
+    class: "primary",
+    text: previous ? "Search again" : "Find repeated tasks",
+    onclick: async () => {
+      button.disabled = true;
+      box.replaceChildren(h("p", { class: "muted", text: "Claude is reading your prompts. This takes about a minute." }));
+      try {
+        renderRun(box, await post("/api/candidates", {}));
+        button.textContent = "Search again";
+      } catch (e) {
+        box.replaceChildren(errorLine(e.message));
+      }
+      button.disabled = false;
+    },
+  });
+  root.append(
+    h("h2", { text: "What you do again and again" }),
+    h("p", { text: "Claude groups your prompts by task. The page then checks each group against your real sessions and keeps only the tasks you did at least 3 times, in 2 sessions, on 2 days. Each candidate shows its proof." }),
+    h("p", { class: "note", text: "This sends up to 1,200 recent prompts (the first 200 characters of each) to Claude, through your Claude Code CLI. Prompts that already start a skill are left out. The draft step sends the full prompts of one candidate." }),
+    button,
+    box,
+  );
+  if (previous) renderRun(box, previous);
+}
+
 // ---------- Shell ----------
 
 function renderWarnings(warnings) {
@@ -271,7 +382,8 @@ function showTab(name) {
 // The tab lives in the URL hash, so a link or a reload keeps it.
 function setupTabs() {
   for (const b of document.querySelectorAll("nav button")) b.addEventListener("click", () => (location.hash = b.dataset.tab));
-  const fromHash = () => showTab(location.hash === "#activity" ? "activity" : "skills");
+  const tabs = ["skills", "candidates", "activity"];
+  const fromHash = () => showTab(tabs.find((t) => `#${t}` === location.hash) ?? "skills");
   window.addEventListener("hashchange", fromHash);
   fromHash();
 }
@@ -287,6 +399,9 @@ async function main() {
     : `${report.claudeDir} · no transcripts found`;
   renderSkills(report);
   renderActivity(report);
+  const previous = await fetch("/api/candidates");
+  if (!previous.ok) throw new Error(`${previous.status} ${await previous.text()}`);
+  renderCandidates(await previous.json());
   renderWarnings(report.warnings);
 }
 
