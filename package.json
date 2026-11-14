@@ -1,0 +1,13 @@
+{
+  "name": "12-angry-men",
+  "version": "0.1.0",
+  "description": "See which of your Claude Code skills you really use. Local, zero dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "12-angry-men": "src/cli.ts" },
+  "files": ["src", "public"],
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node src/cli.ts"
+  }
+}
